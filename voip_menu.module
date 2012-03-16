@@ -1,0 +1,130 @@
+<?php
+
+/**
+ * Implementation of hook_menu().
+ */
+function voip_menu_menu() {
+  $items = array();
+
+  $items['admin/voip/voip_menu'] = array(
+    'title' => 'VoIP Menu',
+    'description' => 'Control which navigation menu is used for the VoIP Menu script.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('voip_menu_default_form', NULL),
+    'access arguments' => array('administer voip drupal framework'),
+    'file' => 'voip_menu.admin.inc',
+  );
+
+  return $items;
+}
+
+/**
+ * Implementation of hook_voipscript_get_script_names().
+ *
+ * @return array
+ */
+function voip_menu_voipscript_get_script_names() {
+  return array('voip_menu_ivr',);
+}
+
+/**
+ * Implementation of hook_voipscript_load_script($script_name, $params = NULL).
+ *
+ * @param $script_name
+ * @param null $params
+ * @return VoipScript
+ */
+function voip_menu_voipscript_load_script($script_name, $params = NULL) {
+
+  // Check if it's us.
+  if ($script_name !== 'voip_menu_ivr') { return; }
+
+  // Check that a menu is selected in the admin settings and the menu exists.
+  $menu_name = variable_get('voip_menu_selected_menu', 'navigation');
+  if(_check_menu_exists(menu_get_names(FALSE), $menu_name) === NULL) {
+    watchdog('voip_menu', 'Invalid default Menu passed to voip_menu_voipscript_load_script. See admin/voip/voip_menu page.');
+    return FALSE;
+  }
+
+  // Load the menu links.
+  $links = menu_navigation_links($menu_name, $level = 0);
+
+  /**
+   * @todo - Modularize this to use ctools plugins to allow decorating the menu and it's contents.
+   * @todo - Make a teaser plugin to replace this.
+   * @todo - Make a back_button plugin to allow going back.
+   * @todo - Make a Read More plugin to chunk the output and allow reading whole bodies instead of just teasers.
+   */
+
+  // Loop over the links to generate the IVR.
+  $ivr_items = array();
+  foreach($links as $link_name => $value) {
+    $loaded_link = menu_get_item($value['href']);
+
+    $node = $loaded_link['page_arguments'][0];
+
+    $ivr_item['Option Text'] = $value['title'];
+    $ivr_item['node'] = $node;
+    // Not sure yet about this.
+    $ivr_item['machine_name'] = $link_name;
+    $ivr_items[$link_name] = $ivr_item;
+  }
+
+  // Create the script.
+  $script = new VoipScript('voip_menu_ivr');
+
+  // Welcome script.
+  $script->addLabel('welcome');
+  $script->addSay('Welcome to  ' . variable_get('site_name', 'Drupal Menu.'));
+
+  $script->addLabel('main_menu');
+  $options_menu = 'Main menu. The following options are available, ';
+
+  // Build the menu.
+  $count = 1;
+  $input_options = array();
+  foreach($ivr_items as $ivr_item) {
+    $options_menu .= 'press ' . $count . '. For ' . $ivr_item['Option Text'] . '. ';
+
+    $input_options[$count] = $ivr_item['machine_name'];
+
+    $count++;
+  }
+  $input_options['#'] = 'hang up';
+  $input_options['i'] = 'hang up';
+  $input_options['t'] = 'hang up';
+
+
+  $invalid_msg = t('Invalid option selected.');
+  $script->addRunIvrMenu($options_menu, $input_options, $invalid_msg);
+  $script->addGoto('%ivr_option_selected');
+
+  foreach($input_options as $option_key => $option_name) {
+    if(!is_numeric($option_key)) { continue; }
+
+    $script->addLabel($option_name);
+    $script->addSay($ivr_items[$option_name]['node']->teaser);
+      $script->addGoto('main_menu');
+  }
+
+  $script->addLabel('hang up');
+  $script->addSay(t('Thanks for using phone version of our site. Goodbye.'));
+  $script->addHangup();
+
+  return $script;
+}
+
+/**
+ * Check that a particular menu name exists in a given list of menus.
+ *
+ * @param $menus - Array of menus from @see menu_get_names().
+ * @param $menu_name - The string name of the menu to find.
+ * @return NULL or Numeric - NULL if not present, Numeric array key if present.
+ */
+function _check_menu_exists($menus, $menu_name) {
+  if(!is_string($menu_name)) {
+    return NULL;
+  }
+  $flipped = array_flip($menus);
+  return isset($flipped[$menu_name]) ? $flipped[$menu_name] : NULL;
+}

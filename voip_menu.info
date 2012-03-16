@@ -1,0 +1,4 @@
+name = VoIP Menu
+description = Create IVR menus from Drupal Navigation menus.
+core = 6.x
+
