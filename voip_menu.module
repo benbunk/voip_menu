@@ -108,7 +108,7 @@ function voip_menu_voipscript_load_script($script_name, $params = NULL) {
   }
 
   $script->addLabel('hang up');
-  $script->addSay(t('Thanks for using phone version of our site. Goodbye.'));
+  $script->addSay(t('Thank you for using the voice based version of our site. Goodbye.'));
   $script->addHangup();
 
   return $script;
