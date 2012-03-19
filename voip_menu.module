@@ -28,6 +28,21 @@ function voip_menu_voipscript_get_script_names() {
 }
 
 /**
+ * Check that a particular menu name exists in a given list of menus.
+ *
+ * @param $menus - Array of menus from @see menu_get_names().
+ * @param $menu_name - The string name of the menu to find.
+ * @return NULL or Numeric - NULL if not present, Numeric array key if present.
+ */
+function _check_menu_exists($menus, $menu_name) {
+  if(!is_string($menu_name)) {
+    return NULL;
+  }
+  $flipped = array_flip($menus);
+  return isset($flipped[$menu_name]) ? $flipped[$menu_name] : NULL;
+}
+
+/**
  * Implementation of hook_voipscript_load_script($script_name, $params = NULL).
  *
  * @param $script_name
@@ -46,66 +61,20 @@ function voip_menu_voipscript_load_script($script_name, $params = NULL) {
     return FALSE;
   }
 
-  // Load the menu links.
-  $links = menu_navigation_links($menu_name, $level = 0);
 
-  /**
-   * @todo - Modularize this to use ctools plugins to allow decorating the menu and it's contents.
-   * @todo - Make a teaser plugin to replace this.
-   * @todo - Make a back_button plugin to allow going back.
-   * @todo - Make a Read More plugin to chunk the output and allow reading whole bodies instead of just teasers.
-   */
+  // Get the menu tree
+  $menu_tree = voip_menu_menu_tree_page_data($menu_name);
 
-  // Loop over the links to generate the IVR.
-  $ivr_items = array();
-  foreach($links as $link_name => $value) {
-    $loaded_link = menu_get_item($value['href']);
 
-    $node = $loaded_link['page_arguments'][0];
-
-    $ivr_item['Option Text'] = $value['title'];
-    $ivr_item['node'] = $node;
-    // Not sure yet about this.
-    $ivr_item['machine_name'] = $link_name;
-    $ivr_items[$link_name] = $ivr_item;
-  }
+  // Recursively loop the menu and turn it into a deep IVR.
+  $built_menu = _recursive_menu_build($menu_tree['tree']);
 
   // Create the script.
   $script = new VoipScript('voip_menu_ivr');
 
-  // Welcome script.
-  $script->addLabel('welcome');
-  $script->addSay('Welcome to  ' . variable_get('site_name', 'Drupal Menu.'));
-
-  $script->addLabel('main_menu');
-  $options_menu = 'Main menu. The following options are available, ';
-
-  // Build the menu.
-  $count = 1;
-  $input_options = array();
-  foreach($ivr_items as $ivr_item) {
-    $options_menu .= 'press ' . $count . '. For ' . $ivr_item['Option Text'] . '. ';
-
-    $input_options[$count] = $ivr_item['machine_name'];
-
-    $count++;
-  }
-  $input_options['#'] = 'hang up';
-  $input_options['i'] = 'hang up';
-  $input_options['t'] = 'hang up';
-
-
-  $invalid_msg = t('Invalid option selected.');
-  $script->addRunIvrMenu($options_menu, $input_options, $invalid_msg);
-  $script->addGoto('%ivr_option_selected');
-
-  foreach($input_options as $option_key => $option_name) {
-    if(!is_numeric($option_key)) { continue; }
-
-    $script->addLabel($option_name);
-    $script->addSay($ivr_items[$option_name]['node']->teaser);
-      $script->addGoto('main_menu');
-  }
+  // After the initial IVR is built we allow the rest to jack in.
+  $val = module_invoke_all('voip_menu_before_build', $built_menu, $script);
+  $script = $val[0];
 
   $script->addLabel('hang up');
   $script->addSay(t('Thank you for using the voice based version of our site. Goodbye.'));
@@ -114,17 +83,200 @@ function voip_menu_voipscript_load_script($script_name, $params = NULL) {
   return $script;
 }
 
-/**
- * Check that a particular menu name exists in a given list of menus.
+
+/*
  *
- * @param $menus - Array of menus from @see menu_get_names().
- * @param $menu_name - The string name of the menu to find.
- * @return NULL or Numeric - NULL if not present, Numeric array key if present.
+ * Our custom menu_tree strcut.
+ *
+ * $items [
+     mlid [
+       item-title
+       item-path
+       item-node
+       items [
+         item:n []
+       ]
+     ]
+     item:n []
+  ]
  */
-function _check_menu_exists($menus, $menu_name) {
-  if(!is_string($menu_name)) {
-    return NULL;
+
+/**
+ *
+ * Build a menu tree that condenses all the information we need to efficiently walk and create a script from.
+ *
+ * @param $menu_tree
+ * @return array
+ */
+function _recursive_menu_build($menu_tree) {
+   $result = array();
+   foreach ($menu_tree as $item) {
+     $item_id = $item['link']['mlid'];
+     // Do the individual menu magic here.
+     $result[$item_id]['mlid'] = $item['link']['mlid'];
+     $result[$item_id]['link_title'] = $item['link']['link_title'];
+     $result[$item_id]['link_path'] = $item['link']['link_path'];
+     $temp = menu_get_item($item['link']['link_path']);
+     $result[$item_id]['node'] = $temp['map'][1];
+
+
+     if ($item['below'] != FALSE) {
+       $result[$item_id]['items'] = _recursive_menu_build($item['below']);
+     }
+   }
+
+  return $result;
+}
+
+
+function _recursive_ivr_build($built_tree, $script, $menu_label, $menu_say) {
+  $script->addLabel($menu_label);
+  $script->addSay($menu_say);
+
+  $count = 1;
+  $input_options = array();
+  $menu_option_say = '';
+  foreach($built_tree as $item) {
+    $menu_option_say .= 'press ' . $count . '. For ' . $item['link_title'] . '. ';
+
+    $input_options[$count] = $item['mlid'];
+
+    $count++;
   }
-  $flipped = array_flip($menus);
-  return isset($flipped[$menu_name]) ? $flipped[$menu_name] : NULL;
+  $input_options['#'] = 'hang up';
+  $input_options['i'] = 'hang up';
+  $input_options['t'] = 'hang up';
+
+  $invalid_msg = t('Invalid option selected.');
+  $script->addRunIvrMenu($menu_option_say, $input_options, $invalid_msg);
+  $script->addGoto('%ivr_option_selected');
+
+  for($i = 1; $i < count($input_options) - 2; $i++) {
+    $script->addLabel($input_options[$i]); // Add the label built above.
+    $script->addSay($built_tree[$input_options[$i]]['node']->teaser);
+
+    // Build sub menus as required.
+    if (is_array($built_tree[$input_options[$i]]['items'])) {
+      foreach($built_tree[$input_options[$i]]['items'] as $item) {
+        $script = _recursive_ivr_build(array($item['mlid'] => $item), $script, $item['mlid'], '');
+      }
+    }
+    $script->addGoto('main_menu');
+  }
+
+  return $script;
+}
+
+
+function voip_menu_voip_menu_before_build($ivr_items, $script) {
+  // Welcome script.
+  $script->addLabel('welcome');
+  $script->addSay('Welcome to  ' . variable_get('site_name', 'Drupal Menu.'));
+
+  $script = _recursive_ivr_build(
+    $ivr_items, $script, 'main_menu', 'Main menu. Main menu. The following options are available, ');
+
+  return $script;
+}
+
+/**
+ *
+ * Implemented our own copy of @see menu_tree_page_data. The code works well but they condense the menu tree by removing
+ * the children which is what we need.
+ *
+ * @param string $menu_name
+ * @return array
+ */
+function voip_menu_menu_tree_page_data($menu_name = 'navigation') {
+  static $tree = array();
+
+  // Load the menu item corresponding to the current page.
+  if ($item = menu_get_item()) {
+    // Generate a cache ID (cid) specific for this page.
+    $cid = 'links:'. $menu_name .':page-cid:'. $item['href'] .':'. (int)$item['access'];
+
+    if (!isset($tree[$cid])) {
+      // If the static variable doesn't have the data, check {cache_menu}.
+      //$cache = cache_get($cid, 'cache_menu');
+      /*if ($cache && isset($cache->data)) {
+        // If the cache entry exists, it will just be the cid for the actual data.
+        // This avoids duplication of large amounts of data.
+        $cache = cache_get($cache->data, 'cache_menu');
+        if ($cache && isset($cache->data)) {
+          $data = $cache->data;
+        }
+      }*/
+      // If the tree data was not in the cache, $data will be NULL.
+      if (!isset($data)) {
+        // Build and run the query, and build the tree.
+        if ($item['access']) {
+          // Check whether a menu link exists that corresponds to the current path.
+          $args = array($menu_name, $item['href']);
+          $placeholders = "'%s'";
+          if (drupal_is_front_page()) {
+            $args[] = '<front>';
+            $placeholders .= ", '%s'";
+          }
+          $parents = db_fetch_array(db_query("SELECT p1, p2, p3, p4, p5, p6, p7, p8 FROM {menu_links} WHERE menu_name = '%s' AND link_path IN (". $placeholders .")", $args));
+
+          if (empty($parents)) {
+            // If no link exists, we may be on a local task that's not in the links.
+            // TODO: Handle the case like a local task on a specific node in the menu.
+            $parents = db_fetch_array(db_query("SELECT p1, p2, p3, p4, p5, p6, p7, p8 FROM {menu_links} WHERE menu_name = '%s' AND link_path = '%s'", $menu_name, $item['tab_root']));
+          }
+          // We always want all the top-level links with plid == 0.
+          $parents[] = '0';
+
+          // Use array_values() so that the indices are numeric for array_merge().
+          $args = $parents = array_unique(array_values($parents));
+          $placeholders = implode(', ', array_fill(0, count($args), '%d'));
+          $expanded = variable_get('menu_expanded', array());
+          // Check whether the current menu has any links set to be expanded.
+          if (in_array($menu_name, $expanded)) {
+            // Collect all the links set to be expanded, and then add all of
+            // their children to the list as well.
+            do {
+              $result = db_query("SELECT mlid FROM {menu_links} WHERE menu_name = '%s' AND expanded = 1 AND has_children = 1 AND plid IN (". $placeholders .') AND mlid NOT IN ('. $placeholders .')', array_merge(array($menu_name), $args, $args));
+              $num_rows = FALSE;
+              while ($item = db_fetch_array($result)) {
+                $args[] = $item['mlid'];
+                $num_rows = TRUE;
+              }
+              $placeholders = implode(', ', array_fill(0, count($args), '%d'));
+            } while ($num_rows);
+          }
+          array_unshift($args, $menu_name);
+        }
+        else {
+          // Show only the top-level menu items when access is denied.
+          $args = array($menu_name, '0');
+          $placeholders = '%d';
+          $parents = array();
+        }
+        // Select the links from the table, and recursively build the tree. We
+        // LEFT JOIN since there is no match in {menu_router} for an external
+        // link.
+        $data['tree'] = menu_tree_data(db_query("
+          SELECT m.load_functions, m.to_arg_functions, m.access_callback, m.access_arguments, m.page_callback, m.page_arguments, m.title, m.title_callback, m.title_arguments, m.type, m.description, ml.*
+          FROM {menu_links} ml LEFT JOIN {menu_router} m ON m.path = ml.router_path
+          WHERE ml.menu_name = '%s' AND ml.plid IN (". $placeholders .")
+          ORDER BY p1 ASC, p2 ASC, p3 ASC, p4 ASC, p5 ASC, p6 ASC, p7 ASC, p8 ASC, p9 ASC", $args), $parents);
+        $data['node_links'] = array();
+        //menu_tree_collect_node_links($data['tree'], $data['node_links']);
+        // Cache the data, if it is not already in the cache.
+        //$tree_cid = _menu_tree_cid($menu_name, $data);
+        //if (!cache_get($tree_cid, 'cache_menu')) {
+        //  cache_set($tree_cid, $data, 'cache_menu');
+        //}
+        // Cache the cid of the (shared) data using the page-specific cid.
+        //cache_set($cid, $tree_cid, 'cache_menu');
+      }
+      // Check access for the current user to each item in the tree.
+      //menu_tree_check_access($data['tree'], $data['node_links']);
+      //$tree[$cid] = $data['tree'];
+    }
+    return $data;
+  }
+
+  return array();
 }
