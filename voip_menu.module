@@ -1,5 +1,22 @@
 <?php
 
+/*
+ *
+ * Our custom menu_tree strcut.
+ *
+ * $items [
+     mlid [
+       item-title
+       item-path
+       item-node
+       items [
+         item:n []
+       ]
+     ]
+     item:n []
+  ]
+ */
+
 /**
  * Implementation of hook_menu().
  */
@@ -62,17 +79,16 @@ function voip_menu_voipscript_load_script($script_name, $params = NULL) {
   }
 
 
-  // Get the menu tree
+  // Get the entire menu tree.
   $menu_tree = voip_menu_menu_tree_page_data($menu_name);
 
-
-  // Recursively loop the menu and turn it into a deep IVR.
+  // Recursively loop the menu and condense the data for walking.
   $built_menu = _recursive_menu_build($menu_tree['tree']);
 
   // Create the script.
   $script = new VoipScript('voip_menu_ivr');
 
-  // After the initial IVR is built we allow the rest to jack in.
+  // Allow other modules to modify the script result.
   $val = module_invoke_all('voip_menu_before_build', $built_menu, $script);
   $script = $val[0];
 
@@ -82,24 +98,6 @@ function voip_menu_voipscript_load_script($script_name, $params = NULL) {
 
   return $script;
 }
-
-
-/*
- *
- * Our custom menu_tree strcut.
- *
- * $items [
-     mlid [
-       item-title
-       item-path
-       item-node
-       items [
-         item:n []
-       ]
-     ]
-     item:n []
-  ]
- */
 
 /**
  *
@@ -128,7 +126,35 @@ function _recursive_menu_build($menu_tree) {
   return $result;
 }
 
+/**
+ *
+ * Implementation of hook_voip_menu_before_build().
+ *
+ * @param $ivr_items
+ * @param $script
+ * @return mixed
+ */
+function voip_menu_voip_menu_before_build($ivr_items, $script) {
+  // Welcome script.
+  $script->addLabel('welcome');
+  $script->addSay('Welcome to  ' . variable_get('site_name', 'Drupal Menu.'));
 
+  $script = _recursive_ivr_build(
+    $ivr_items, $script, 'main_menu', 'Main menu. Main menu. The following options are available, ');
+
+  return $script;
+}
+
+/**
+ *
+ * Walk a condensed menu to recursively generate an IVR menu per node in the menu tree.
+ *
+ * @param $built_tree
+ * @param $script
+ * @param $menu_label
+ * @param $menu_say
+ * @return mixed
+ */
 function _recursive_ivr_build($built_tree, $script, $menu_label, $menu_say) {
   $script->addLabel($menu_label);
   $script->addSay($menu_say);
@@ -168,16 +194,24 @@ function _recursive_ivr_build($built_tree, $script, $menu_label, $menu_say) {
 }
 
 
-function voip_menu_voip_menu_before_build($ivr_items, $script) {
-  // Welcome script.
-  $script->addLabel('welcome');
-  $script->addSay('Welcome to  ' . variable_get('site_name', 'Drupal Menu.'));
 
-  $script = _recursive_ivr_build(
-    $ivr_items, $script, 'main_menu', 'Main menu. Main menu. The following options are available, ');
 
-  return $script;
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/****** Hide this extra far down so I don't have to see this ********/
 
 /**
  *
