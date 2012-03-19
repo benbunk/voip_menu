@@ -139,8 +139,7 @@ function voip_menu_voip_menu_before_build($ivr_items, $script) {
   $script->addLabel('welcome');
   $script->addSay('Welcome to  ' . variable_get('site_name', 'Drupal Menu.'));
 
-  $script = _recursive_ivr_build(
-    $ivr_items, $script, 'main_menu', 'Main menu. Main menu. The following options are available, ');
+  $script = _recursive_ivr_build($ivr_items, $script, 'main_menu', 'Main menu. The following options are available, ');
 
   return $script;
 }
@@ -155,7 +154,7 @@ function voip_menu_voip_menu_before_build($ivr_items, $script) {
  * @param $menu_say
  * @return mixed
  */
-function _recursive_ivr_build($built_tree, $script, $menu_label, $menu_say) {
+function _recursive_ivr_build($built_tree, &$script, $menu_label, $menu_say) {
   $script->addLabel($menu_label);
   $script->addSay($menu_say);
 
@@ -187,7 +186,6 @@ function _recursive_ivr_build($built_tree, $script, $menu_label, $menu_say) {
         $script = _recursive_ivr_build(array($item['mlid'] => $item), $script, $item['mlid'], '');
       }
     }
-    $script->addGoto('main_menu');
   }
 
   return $script;
